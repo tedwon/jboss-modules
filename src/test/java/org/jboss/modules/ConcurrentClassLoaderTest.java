@@ -45,35 +45,30 @@ public class ConcurrentClassLoaderTest {
         /*
             Uncomment the following lines to demonstrate a deadlock that occurs with normal classloader delegation
          */
-        //final DeadLockingLoader classLoaderOne = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
-        //final DeadLockingLoader classLoaderTwo = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
-        final TestConcurrentClassLoader classLoaderOne = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
-        final TestConcurrentClassLoader classLoaderTwo = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));        classLoaderOne.delegate = classLoaderTwo;
+        final DeadLockingLoader classLoaderOne = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
+        final DeadLockingLoader classLoaderTwo = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
+//        final TestConcurrentClassLoader classLoaderOne = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
+//        final TestConcurrentClassLoader classLoaderTwo = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
+        classLoaderOne.delegate = classLoaderTwo;
         classLoaderTwo.delegate = classLoaderOne;
 
         final CountDownLatch latch = new CountDownLatch(1);
-        final Thread threadOne = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    latch.await();
-                    classLoaderOne.loadClass(ClassA.class.getName());
-                } catch (Throwable t) {
-                    threadOneProblem = t;
-                }
+        final Thread threadOne = new Thread(() -> {
+            try {
+                latch.await();
+                classLoaderOne.loadClass(ClassA.class.getName());
+            } catch (Throwable t) {
+                threadOneProblem = t;
             }
-        });
-        final Thread threadTwo = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    latch.await();
-                    classLoaderTwo.loadClass(ClassC.class.getName());
-                } catch (Throwable t) {
-                    threadTwoProblem = t;
-                }
+        }, "threadOne");
+        final Thread threadTwo = new Thread(() -> {
+            try {
+                latch.await();
+                classLoaderTwo.loadClass(ClassC.class.getName());
+            } catch (Throwable t) {
+                threadTwoProblem = t;
             }
-        });
+        }, "threadTwo");
         threadOne.start();
         threadTwo.start();
 
@@ -93,7 +88,7 @@ public class ConcurrentClassLoaderTest {
                 parallelOk = ClassLoader.registerAsParallelCapable();
             } catch (Throwable ignored) {
             }
-            if (! parallelOk) {
+            if (!parallelOk) {
                 throw new Error("Failed to register " + TestConcurrentClassLoader.class.getName() + " as parallel-capable");
             }
         }
@@ -110,19 +105,62 @@ public class ConcurrentClassLoaderTest {
         @Override
         protected Class<?> findClass(String className, boolean exportsOnly, final boolean resolve) throws ClassNotFoundException {
             Class<?> c = findLoadedClass(className);
-            if(c == null && className.startsWith("java"))
+            if (c == null && className.startsWith("java"))
                 c = findSystemClass(className);
-            if(c == null && allowedClasses.contains(className)) {
+            if (c == null && allowedClasses.contains(className)) {
                 try {
                     final byte[] classBytes = Util.getClassBytes(realLoader.loadClass(className));
                     c = defineClass(className, classBytes, 0, classBytes.length);
-                } catch(Throwable t) {
+                } catch (Throwable t) {
                     throw new ClassNotFoundException("Failed to load class " + className, t);
                 }
             }
-            if(c == null)
-                c =  delegate.loadClass(className);
+            if (c == null)
+                c = delegate.loadClass(className);
             return c;
         }
-    };
+    }
+
+    ;
+
+    private static final class DeadLockingLoader extends ClassLoader {
+        private final ClassLoader realLoader;
+        private final Set<String> allowedClasses = new HashSet<String>();
+        private ClassLoader delegate;
+
+        private DeadLockingLoader(final ClassLoader realLoader, final Collection<String> allowedClasses) {
+            super(null);
+            this.realLoader = realLoader;
+            this.allowedClasses.addAll(allowedClasses);
+        }
+
+        @Override
+        protected synchronized Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
+            Class c = findLoadedClass(name);
+            if (c == null && name.startsWith("java"))
+                c = findSystemClass(name);
+            if (c == null) {
+                c = findClass(name);
+            }
+            if (resolve) {
+                resolveClass(c);
+            }
+            return c;
+        }
+
+        @Override
+        protected Class<?> findClass(String className) throws ClassNotFoundException {
+            try {
+                if (allowedClasses.contains(className)) {
+                    final byte[] classBytes = Util.getClassBytes(realLoader.loadClass(className));
+                    return defineClass(className, classBytes, 0, classBytes.length);
+                }
+                return delegate.loadClass(className);
+            } catch (Throwable t) {
+                throw new ClassNotFoundException("Failed to load class " + className, t);
+            }
+        }
+    }
+
+    ;
 }
