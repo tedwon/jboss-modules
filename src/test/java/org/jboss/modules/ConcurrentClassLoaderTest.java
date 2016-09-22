@@ -44,18 +44,21 @@ public class ConcurrentClassLoaderTest {
     public void testClassLoadingDeadlockAvoidance() throws Throwable {
         /*
             Uncomment the following lines to demonstrate a deadlock that occurs with normal classloader delegation
+
+            See https://blog.tier1app.com/2014/05/17/deadlock/
          */
-        final DeadLockingLoader classLoaderOne = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
-        final DeadLockingLoader classLoaderTwo = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
-//        final TestConcurrentClassLoader classLoaderOne = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
-//        final TestConcurrentClassLoader classLoaderTwo = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
+//        final DeadLockingLoader classLoaderOne = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
+//        final DeadLockingLoader classLoaderTwo = new DeadLockingLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
+        final TestConcurrentClassLoader classLoaderOne = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassA.class.getName(), ClassD.class.getName()));
+        final TestConcurrentClassLoader classLoaderTwo = new TestConcurrentClassLoader(ConcurrentClassLoaderTest.class.getClassLoader(), Arrays.asList(ClassB.class.getName(), ClassC.class.getName()));
         classLoaderOne.delegate = classLoaderTwo;
         classLoaderTwo.delegate = classLoaderOne;
 
-        final CountDownLatch latch = new CountDownLatch(1);
+        final CountDownLatch startSignal = new CountDownLatch(1);
         final Thread threadOne = new Thread(() -> {
             try {
-                latch.await();
+                startSignal.await();
+                System.out.println(1);
                 classLoaderOne.loadClass(ClassA.class.getName());
             } catch (Throwable t) {
                 threadOneProblem = t;
@@ -63,7 +66,8 @@ public class ConcurrentClassLoaderTest {
         }, "threadOne");
         final Thread threadTwo = new Thread(() -> {
             try {
-                latch.await();
+                startSignal.await();
+                System.out.println(2);
                 classLoaderTwo.loadClass(ClassC.class.getName());
             } catch (Throwable t) {
                 threadTwoProblem = t;
@@ -72,7 +76,7 @@ public class ConcurrentClassLoaderTest {
         threadOne.start();
         threadTwo.start();
 
-        latch.countDown();
+        startSignal.countDown();
 
         threadOne.join();
         threadTwo.join();
@@ -121,9 +125,18 @@ public class ConcurrentClassLoaderTest {
         }
     }
 
-    ;
-
     private static final class DeadLockingLoader extends ClassLoader {
+        static {
+            boolean parallelOk = true;
+            try {
+                parallelOk = ClassLoader.registerAsParallelCapable();
+            } catch (Throwable ignored) {
+            }
+            if (!parallelOk) {
+                throw new Error("Failed to register " + TestConcurrentClassLoader.class.getName() + " as parallel-capable");
+            }
+        }
+
         private final ClassLoader realLoader;
         private final Set<String> allowedClasses = new HashSet<String>();
         private ClassLoader delegate;
@@ -133,6 +146,11 @@ public class ConcurrentClassLoaderTest {
             this.realLoader = realLoader;
             this.allowedClasses.addAll(allowedClasses);
         }
+
+//        @Override
+//        public Class<?> loadClass(String name) throws ClassNotFoundException {
+//            return loadClass(name, false);
+//        }
 
         @Override
         protected synchronized Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
@@ -150,6 +168,7 @@ public class ConcurrentClassLoaderTest {
 
         @Override
         protected Class<?> findClass(String className) throws ClassNotFoundException {
+            System.out.printf(className);
             try {
                 if (allowedClasses.contains(className)) {
                     final byte[] classBytes = Util.getClassBytes(realLoader.loadClass(className));
@@ -161,6 +180,4 @@ public class ConcurrentClassLoaderTest {
             }
         }
     }
-
-    ;
 }
